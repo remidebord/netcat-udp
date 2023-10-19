@@ -1,16 +1,14 @@
-ifeq ($(DEBUG), y)
-	CFLAGS = -Wall -O -g -DDEBUG
-else
-	CFLAGS = -Wall -O
-endif
-
 ifndef CC
 	CC = gcc
 endif
 
+CFLAGS = -Wall -O
 PROG=nc2
 
 all: $(PROG)
+
+debug: CFLAGS = -Wall -O -g -DDEBUG
+debug: ${PROG}
 
 main.o: main.c
 	$(CC) $(CFLAGS) -c main.c 
