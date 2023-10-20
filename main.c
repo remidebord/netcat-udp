@@ -16,6 +16,8 @@
 
 #define BUFFER_SIZE 32
 
+struct pollfd pfd[3];
+
 void print_ascii(char *buffer, int length)
 {
 	for (int i = 0; i < length; i++) {
@@ -28,15 +30,175 @@ void print_ascii(char *buffer, int length)
 	printf("\n");
 }
 
+int client(char* ip, int port)
+{
+	char buffer[BUFFER_SIZE] = {0};
+	struct sockaddr_in saddr;
+	int sock, length;
+
+#ifdef DEBUG
+	printf("start client...\n");
+#endif
+
+	/* set network address, port */
+	saddr.sin_family = AF_INET;
+	saddr.sin_port = htons(port);
+	inet_pton(AF_INET, ip, &saddr.sin_addr);
+
+	/* socket UDP */
+	sock = socket(AF_INET, SOCK_DGRAM, 0);
+
+	/* bind socket to destination IP address */
+	if (connect(sock, (struct sockaddr*)&saddr, sizeof(saddr)) == -1) {
+		printf("connect error (%d: %s).\n", errno, strerror(errno));
+		return EXIT_FAILURE;
+	}
+
+	pfd[POLL_INET].fd = sock;
+	pfd[POLL_INET].events = 0;
+
+	length = 0;
+
+	while (1) {
+		/* configure events to poll */
+		if (poll(pfd, 3, -1) == -1) {
+			printf("poll error (%d: %s).\n", errno, strerror(errno));
+			return EXIT_FAILURE;
+		}
+
+		/* read from stdin ? */
+		if (pfd[POLL_STDIN].revents & POLLIN) {
+			length = read(pfd[POLL_STDIN].fd, buffer, sizeof(buffer));
+			if (length == -1) {
+				printf("read error (%d: %s).\n", errno, strerror(errno));
+				return EXIT_FAILURE;
+			}
+
+			if (length > 0) {
+#ifdef DEBUG
+				print_ascii(buffer, length);
+#endif
+				/* enable write to network */
+				pfd[POLL_INET].events = POLLOUT;
+				/* disable read from stdin */
+				pfd[POLL_STDIN].events = 0;
+			}
+		}
+
+		/* write to network ? */
+		if ((pfd[POLL_INET].revents & POLLOUT) && (length > 0)) {
+			length = write(pfd[POLL_INET].fd, buffer, length);
+			if (length == -1) {
+				printf("write error (%d: %s).\n", errno, strerror(errno));
+				return EXIT_FAILURE;
+			}
+
+			/* no more data to send ? */
+			if (length < sizeof(buffer))
+				return EXIT_SUCCESS;
+			else {
+				/* disable write to network */
+				pfd[POLL_INET].events = 0;
+				/* enable read from stdin */
+				pfd[POLL_STDIN].events = POLLIN;
+			}
+
+			length = 0;
+		}
+	}
+}
+
+int server(char* ip, int port)
+{
+	char buffer[BUFFER_SIZE] = {0};
+	struct sockaddr_in saddr;
+	int sock, length;
+
+#ifdef DEBUG
+	printf("start server...\n");
+#endif
+
+	/* set network address, port */
+	saddr.sin_family = AF_INET;
+	saddr.sin_port = htons(port);
+	saddr.sin_addr.s_addr = htonl(INADDR_ANY);
+
+	if (ip)
+		inet_pton(AF_INET, ip, &saddr.sin_addr);
+
+	/* socket UDP */
+	sock = socket(AF_INET, SOCK_DGRAM, 0);
+
+	/* bind socket to port */
+	bind(sock, (struct sockaddr*)&saddr, sizeof(saddr));
+
+	pfd[POLL_INET].fd = sock;
+	pfd[POLL_INET].events = POLLIN;
+
+	length = 0;
+
+	while (1) {
+		/* configure events to poll */
+		if (poll(pfd, 3, -1) == -1) {
+			printf("poll error (%d: %s).\n", errno, strerror(errno));
+			return EXIT_FAILURE;
+		}
+
+		/* read from network ? */
+		if (pfd[POLL_INET].revents & POLLIN) {
+#ifdef DEBUG
+			printf("read sock\n");
+#endif
+			length = read(pfd[POLL_INET].fd, buffer, sizeof(buffer));
+			if (length == -1) {
+				printf("read error (%d: %s).\n", errno, strerror(errno));
+				return EXIT_FAILURE;
+			}
+
+			if (length > 0) {
+#ifdef DEBUG
+				print_ascii(buffer, length);
+#endif
+				/* enable write to stdout */
+				pfd[POLL_STDOUT].events = POLLOUT;
+				/* disable read from network */
+				pfd[POLL_INET].events = 0;
+			}
+
+			pfd[POLL_INET].revents = 0;
+		}
+
+		/* write to stdout ? */
+		if ((pfd[POLL_STDOUT].revents & POLLOUT) && (length > 0)) {
+#ifdef DEBUG
+			printf("write stdout\n");
+#endif
+			if (write(pfd[POLL_STDOUT].fd, buffer, length) == -1) {
+				printf("write error (%d: %s).\n", errno, strerror(errno));
+				return EXIT_FAILURE;
+			}
+
+			/* enable read from network */
+			pfd[POLL_INET].events = POLLIN;
+			/* disable stdout write */
+			pfd[POLL_STDOUT].events = 0;
+			/* clear length */
+			length = 0;
+
+			pfd[POLL_STDOUT].revents = 0;
+		}
+	}
+}
+
+void usage(int argc, char **argv)
+{
+	printf("Usage: %s [HOST] PORT\n", argv[0]);
+}
+
 int main(int argc, char **argv)
 {
-	char ibuffer[BUFFER_SIZE] = {0};
-	char obuffer[BUFFER_SIZE] = {0};
-	struct sockaddr_in saddr;
-	struct pollfd pfd[3];
-	int ilength, olength;
-	int sock, port;
 	char *ip = NULL;
+	int port;
 
 	if ((argc == 1) || (argc > 3)) {
 		printf("Usage: %s [HOST] PORT\n", argv[0]);
@@ -47,112 +209,24 @@ int main(int argc, char **argv)
 	} else
 		port = atoi(argv[1]);
 
-	/* set network address, port */
-	saddr.sin_family = AF_INET;
-	saddr.sin_port = htons(port);
-	saddr.sin_addr.s_addr = htonl(INADDR_ANY);
-	
-	if (ip)
-		inet_pton(AF_INET, ip, &saddr.sin_addr);
-
-	/* socket UDP */
-	sock = socket(AF_INET, SOCK_DGRAM, 0);
-
-	/* bind socket and network infos */
-	bind(sock, (struct sockaddr*)&saddr, sizeof(saddr));
-
-	/* connect socket */
-	if (connect(sock, (struct sockaddr*)&saddr, sizeof(saddr)) == -1)
-		return EXIT_FAILURE;
-
 	pfd[POLL_STDIN].fd = STDIN_FILENO;
 	pfd[POLL_STDIN].events = POLLIN;
 
-	pfd[POLL_STDOUT].fd = STDOUT_FILENO;
-	pfd[POLL_STDOUT].events = 0;
+	if (poll(pfd, 1, 100) == -1) {
+		printf("poll error (%d: %s).\n", errno, strerror(errno));
+		return EXIT_FAILURE;
+	}
 
-	pfd[POLL_INET].fd = sock;
-	pfd[POLL_INET].events = POLLIN;
-
-	ilength = 0;
-	olength = 0;
-
-	while (1) {
-		/* poll */
-		if (poll(pfd, 3, -1) == -1) {
-			printf("poll error (%d: %s).\n", errno, strerror(errno));
+	/* data available on stdin ? */
+	if (pfd[POLL_STDIN].revents & POLLIN) {
+		if (ip)
+			return client(ip, port);
+		else {
+			usage(argc, argv);
 			return EXIT_FAILURE;
-		}
-
-		/* data from stdin ? */
-		if ((pfd[POLL_STDIN].revents & POLLIN) && (ilength < sizeof(ibuffer))) {
-			ilength = read(pfd[POLL_STDIN].fd, ibuffer, sizeof(ibuffer));
-			if (ilength == -1) {
-				printf("read error (%d: %s).\n", errno, strerror(errno));
-				return EXIT_FAILURE;
-			}
-
-			if (ilength > 0) {
-				print_ascii(ibuffer, ilength);
-				pfd[POLL_INET].events |= POLLOUT;
-				pfd[POLL_STDIN].events = 0;
-			}
-		}
-
-		/* write to network ? */
-		if ((pfd[POLL_INET].revents & POLLOUT) && (ilength > 0)) {
-			ilength = write(pfd[POLL_INET].fd, ibuffer, ilength);
-			if (ilength == -1) {
-				printf("write error (%d: %s).\n", errno, strerror(errno));
-				return EXIT_FAILURE;
-			}
-
-			if (ilength < sizeof(ibuffer))
-				return EXIT_SUCCESS;
-
-			ilength = 0;
-		}
-
-		/* read from network ? */
-		if ((pfd[POLL_INET].revents & POLLIN) && (olength < sizeof(obuffer))) {
-			printf("read sock\n");
-
-			olength = read(pfd[POLL_INET].fd, obuffer, olength);
-			if (olength == -1) {
-				printf("read error (%d: %s).\n", errno, strerror(errno));
-				return EXIT_FAILURE;
-			}
-
-			if (olength > 0)
-				print_ascii(obuffer, olength);
-
-			/* enable stdout polling */
-			if (olength > 0)
-				pfd[POLL_STDOUT].events = POLLOUT;
-			/* disable sock polling */
-			if (olength == sizeof(obuffer))
-				pfd[POLL_INET].events &= ~POLLIN;
-		}
-
-		if ((pfd[POLL_STDOUT].revents & POLLOUT) && (olength > 0)) {
-			printf("write stdout\n");
-
-			olength = write(pfd[POLL_STDOUT].fd, obuffer, olength);
-			if (olength == -1) {
-				printf("write error (%d: %s).\n", errno, strerror(errno));
-				return EXIT_FAILURE;
-			}
-
-			olength = 0;
-
-			/* enable sock polling and disable stdout polling */
-			if (olength < sizeof(obuffer)) {
-				pfd[POLL_INET].events |= POLLIN;
-				pfd[POLL_STDOUT].events = 0;
-			}
 		}
 	}
 
-	return EXIT_SUCCESS;
+	return server(ip, port);
 }
 
