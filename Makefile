@@ -3,7 +3,7 @@ ifndef CC
 endif
 
 CFLAGS = -Wall -O
-PROG=nc2
+PROG=ncu
 
 all: $(PROG)
 

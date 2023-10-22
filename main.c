@@ -212,6 +212,7 @@ int main(int argc, char **argv)
 	pfd[POLL_STDIN].fd = STDIN_FILENO;
 	pfd[POLL_STDIN].events = POLLIN;
 
+	/* poll is a blocking operation, so set a timeout (100ms) */
 	if (poll(pfd, 1, 100) == -1) {
 		printf("poll error (%d: %s).\n", errno, strerror(errno));
 		return EXIT_FAILURE;
