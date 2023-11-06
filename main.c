@@ -93,6 +93,8 @@ int client(char* ip, int port)
 				return EXIT_FAILURE;
 			}
 
+			fflush(stdin);
+
 			/* no more data to send ? */
 			if (length < sizeof(buffer))
 				return EXIT_SUCCESS;
@@ -134,6 +136,9 @@ int server(char* ip, int port)
 
 	pfd[POLL_INET].fd = sock;
 	pfd[POLL_INET].events = POLLIN;
+
+	pfd[POLL_STDOUT].fd = STDOUT_FILENO;
+	pfd[POLL_STDOUT].events = 0;
 
 	length = 0;
 
@@ -177,6 +182,8 @@ int server(char* ip, int port)
 				printf("write error (%d: %s).\n", errno, strerror(errno));
 				return EXIT_FAILURE;
 			}
+
+			fflush(stdout);
 
 			/* enable read from network */
 			pfd[POLL_INET].events = POLLIN;
